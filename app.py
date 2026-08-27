@@ -8,7 +8,7 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 # Load the YOLO model once to save cloud server memory
 @st.cache_resource
 def load_model():
-    return YOLO('yolov8n.pt')
+    return YOLO('yolov8m.pt')
 
 model = load_model()
 
