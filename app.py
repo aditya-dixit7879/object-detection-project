@@ -1,60 +1,46 @@
 import streamlit as st
 import cv2
-import tempfile
+import av
 from ultralytics import YOLO
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-# Load the YOLOv8 AI model
-model = YOLO('yolov8n.pt')
+# Load the model only once to save cloud server memory
+@st.cache_resource
+def load_model():
+    return YOLO('yolov8n.pt')
 
-st.set_page_config(page_title="Object Detection & Tracking", layout="wide")
-st.title("Real-Time Object Tracking System")
-st.write("This advanced version assigns unique IDs to objects across frames.")
+model = load_model()
 
-st.sidebar.header("Settings")
-confidence = st.sidebar.slider("Confidence Level", 0.0, 1.0, 0.5)
+st.set_page_config(page_title="Object Detection System", layout="wide")
+st.title("Cloud-Based Live Webcam Detection")
+st.write("This version uses WebRTC to securely access any user's camera over the internet.")
 
-# Give users a choice: Webcam (Local) or Video Upload (Cloud)
-source_radio = st.sidebar.radio("Select Source", ["Webcam", "Upload Video"])
+# WebRTC requires STUN servers to help devices find each other over the internet
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
-st.subheader("Tracking Feed")
-video_placeholder = st.empty()
+# This function acts as the "engine". It takes a frame from the user's browser,
+# passes it to YOLO, and sends the drawn image back to the browser.
+def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
+    # Convert the browser's video frame into an image OpenCV can read
+    img = frame.to_ndarray(format="bgr24")
+    
+    # Run YOLO object tracking on that specific frame
+    results = model.track(img, persist=True)
+    
+    # Draw the bounding boxes and IDs
+    annotated_img = results[0].plot()
+    
+    # Send the processed image back to the user's screen
+    return av.VideoFrame.from_ndarray(annotated_img, format="bgr24")
 
-if source_radio == "Webcam":
-    run_camera = st.checkbox("Start Camera")
-    if run_camera:
-        cap = cv2.VideoCapture(0)
-        while run_camera:
-            ret, frame = cap.read()
-            if not ret:
-                st.error("Camera not found. Please use 'Upload Video' if you are on the cloud.")
-                break
-            
-            # PHASE 2 UPGRADE: Using .track() instead of just calling the model
-            # persist=True keeps the IDs consistent across frames
-            results = model.track(frame, conf=confidence, persist=True)
-            
-            annotated_frame = results[0].plot()
-            annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            video_placeholder.image(annotated_frame, channels="RGB")
-        cap.release()
-
-elif source_radio == "Upload Video":
-    uploaded_file = st.file_uploader("Upload a video file (mp4, avi)", type=['mp4', 'avi'])
-    if uploaded_file is not None:
-        tfile = tempfile.NamedTemporaryFile(delete=False) 
-        tfile.write(uploaded_file.read())
-        
-        cap = cv2.VideoCapture(tfile.name)
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # PHASE 2 UPGRADE: Using .track() for uploaded videos too
-            results = model.track(frame, conf=confidence, persist=True)
-            
-            annotated_frame = results[0].plot()
-            annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            video_placeholder.image(annotated_frame, channels="RGB")
-        cap.release()
+# Create the WebRTC video player on the website
+webrtc_streamer(
+    key="object-detection",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration=RTC_CONFIGURATION,
+    video_frame_callback=video_frame_callback,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True
+)
